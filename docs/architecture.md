@@ -67,24 +67,6 @@ Real-time CDC pipeline replicating PostgreSQL to MinIO with sub-10 second latenc
 | Type Safety | Strong typing prevents data corruption |
 | Cloud-Native | Optimized for S3/MinIO object storage |
 
-### Partition Strategy
-
-**Date-Based Partitioning:**
-```
-s3://my-data-lake/
-  topics/
-    customers/
-      year=2024/
-        month=01/
-          day=01/
-            customers+0+0000000000.snappy.parquet
-            customers+0+0000000100.snappy.parquet
-          day=02/
-            customers+0+0000000200.snappy.parquet
-        month=02/
-          day=01/
-            customers+0+0000000300.snappy.parquet
-```
 
 **Query Optimization:**
 ```sql
@@ -98,17 +80,9 @@ SELECT * FROM customers WHERE created_at > '2024-01-15';
 ### File Rotation Strategy
 
 **Rotation Triggers:**
-1. **Size-based:** `flush.size=5` records
-2. **Time-based:** `rotate.interval.ms=60000` (60 seconds)
-3. **Shutdown:** Connector graceful stop
+1. **Size-based:** `flush.size=1` records
+2. **Time-based:** `rotate.interval.ms=10000` (10 seconds)
 
-**Example Rotation:**
-```
-10:00:00 - Insert 3 records → Wait
-10:00:30 - Insert 2 records → Total 5 → File rotated (flush.size reached)
-10:01:00 - Insert 1 record → Wait
-10:02:00 - Timer expires → File rotated (rotate.interval.ms reached)
-```
 
 ### Compression Comparison
 
