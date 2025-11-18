@@ -51,7 +51,7 @@ psql -h localhost -p 5432 -U postgres -d ecommerce
 - **Real-time CDC:** Sub-10 second latency from PostgreSQL to MinIO
 - **PII Exclusion:** Email and phone fields completely removed (not masked)
 - **Parquet Storage:** 70% compression with Snappy, columnar format
-- **Date Partitioning:** `year=YYYY/month=MM/day=DD` structure
+- **Date Partitioning:** `YYYY/MM/DD` structure
 - **Schema Evolution:** Backward compatibility enforced via Schema Registry
 - **Monitoring:** Prometheus + Grafana with kafka-exporter metrics
 - **GDPR Compliant:** Complete PII field removal before storage
@@ -62,7 +62,6 @@ psql -h localhost -p 5432 -U postgres -d ecommerce
 - PostgreSQL with 4 tables (customers, products, orders, order_items)
 - Debezium capturing changes (29 customer records processed)
 - Kafka topics with Avro serialization
-- Schema Registry with 10 schemas registered
 - Grafana dashboard showing pipeline health
 - kafka-exporter providing metrics to Prometheus
 
@@ -102,11 +101,6 @@ docker-compose exec kafka bash -c "unset KAFKA_OPTS && kafka-topics --bootstrap-
 curl http://localhost:8083/connectors/debezium-postgres-source/status | jq
 ```
 
-### Verify Schemas
-```bash
-curl http://localhost:8081/subjects | jq
-```
-
 ### Check Metrics
 ```bash
 # Verify Prometheus is scraping
@@ -121,13 +115,7 @@ curl -s http://localhost:9308/metrics | grep kafka_topic_partition_current_offse
 **Grafana Dashboard:**
 - Open http://localhost:3000
 - Login: admin/admin
-- Dashboard shows: Connector Health, CDC Topics Message Count, Total Messages, Consumer Lag
 
-**Prometheus Targets:**
-- kafka-exporter:9308 (topic metrics, consumer lag)
-- postgres-exporter:9187 (database stats)
-- minio:9000 (storage metrics)
-- kafka-connect via JMX (connector health)
 
 ## Troubleshooting
 
@@ -232,33 +220,3 @@ docker-compose exec schema-registry kafka-avro-console-consumer \
 curl http://localhost:8081/subjects/ecommerce.public.customers-value/versions/latest | jq
 ```
 
-## Production Considerations
-
-**Security (Not in local setup):**
-- Enable TLS for all services
-- Use SASL authentication for Kafka
-- Store credentials in HashiCorp Vault
-- Apply Kubernetes network policies
-
-**High Availability:**
-- 3 Kafka brokers with replication factor 3
-- 3 Kafka Connect workers
-- PostgreSQL with streaming replication
-- MinIO distributed mode
-
-**Performance:**
-- Tune flush.size (1000-5000) based on latency requirements
-- Adjust consumer.max.poll.records (500-2000)
-- Monitor lag and scale Connect workers
-- Use same AZ for all components
-
-## Documentation
-
-- [Architecture](docs/architecture.md) - System design, components, data flow
-- [Architecture Diagrams](docs/architecture-diagram.mmd) - Mermaid diagrams
-- [Data Flow](docs/data-flow.mmd) - Sequence diagram
-- [Monitoring](docs/monitoring.mmd) - Metrics architecture
-- [Transformations](docs/transformation.mmd) - PII handling flow
-
-## License
-MIT
