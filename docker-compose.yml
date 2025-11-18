@@ -1,0 +1,254 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with CDC enabled
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ecommerce
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./sql/sample-data.sql:/docker-entrypoint-initdb.d/02-sample-data.sql
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "max_replication_slots=10"
+
+  # Zookeeper for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  # Kafka Broker
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+    command:
+      - bash
+      - -c
+      - |
+        export KAFKA_OPTS=""
+        /etc/confluent/docker/run
+
+  # Schema Registry
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+    container_name: schema-registry
+    depends_on:
+      - kafka
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081      # REST API (leave mapped as before)
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: BACKWARD
+      SCHEMA_REGISTRY_JMX_PORT: 7073                     # JMX port variable
+      KAFKA_OPTS: "-javaagent:/usr/share/java/jmx_prometheus_javaagent/jmx_prometheus_javaagent-0.17.0.jar=7073:/etc/jmx-exporter/schema-registry.yml"
+    ports:
+      - "8081:8081"   # API (used by connectors & schema registry UI)
+      - "7073:7073"   # JMX metrics (Prometheus scrapes this)
+    volumes:
+      - ./monitoring/jmx-exporter:/etc/jmx-exporter
+      - ./monitoring/jmx_prometheus_javaagent-0.17.0.jar:/usr/share/java/jmx_prometheus_javaagent/jmx_prometheus_javaagent-0.17.0.jar
+
+  # Kafka Connect with Debezium and S3 Sink
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:7.5.0
+    container_name: kafka-connect
+    depends_on:
+      - kafka
+      - schema-registry
+      - postgres
+      - minio
+    ports:
+      - "8083:8083"
+      - "7072:7072"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:29092
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: kafka-connect-group
+      CONNECT_CONFIG_STORAGE_TOPIC: connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_INTERNAL_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_INTERNAL_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password123
+      KAFKA_JMX_PORT: 9999
+      KAFKA_JMX_HOSTNAME: kafka-connect
+      KAFKA_OPTS: "-javaagent:/usr/share/java/jmx_prometheus_javaagent/jmx_prometheus_javaagent-0.17.0.jar=7072:/etc/jmx-exporter/kafka-connect.yml"
+    volumes:
+      - ./monitoring/jmx-exporter:/etc/jmx-exporter
+      - ./monitoring/jmx_prometheus_javaagent-0.17.0.jar:/usr/share/java/jmx_prometheus_javaagent/jmx_prometheus_javaagent-0.17.0.jar
+    command:
+      - bash
+      - -c
+      - |
+        echo "Installing Debezium..."
+        cd /tmp
+        wget -q https://repo1.maven.org/maven2/io/debezium/debezium-connector-postgres/2.5.0.Final/debezium-connector-postgres-2.5.0.Final-plugin.tar.gz
+        tar -xzf debezium-connector-postgres-2.5.0.Final-plugin.tar.gz
+        mv debezium-connector-postgres /usr/share/confluent-hub-components/
+        echo "Installing S3 Sink..."
+        confluent-hub install --no-prompt confluentinc/kafka-connect-s3:10.5.0
+        echo "Starting Kafka Connect..."
+        /etc/confluent/docker/run
+
+  # MinIO (S3-compatible storage)
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password123
+      MINIO_PROMETHEUS_AUTH_TYPE: public   # <— added for Prometheus scrape
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+
+  # MinIO Client for bucket creation
+  minio-client:
+    image: minio/mc:latest
+    container_name: minio-client
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 10;
+      /usr/bin/mc alias set local http://minio:9000 admin password123;
+      /usr/bin/mc mb local/my-data-lake --ignore-existing;
+      /usr/bin/mc policy set download local/my-data-lake;
+      tail -f /dev/null
+      "
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    depends_on:
+      - kafka
+      - kafka-connect
+      - postgres-exporter
+      - node-exporter
+      - kafka-exporter          # <— added
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+
+  # pgAdmin for PostgreSQL management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    depends_on:
+      - postgres
+
+  # PostgreSQL Exporter for monitoring
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres-exporter
+    ports:
+      - "9187:9187"
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@postgres:5432/ecommerce?sslmode=disable"
+    depends_on:
+      - postgres
+
+  # Node Exporter for system metrics
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    ports:
+      - "9100:9100"
+    command:
+      - '--path.rootfs=/host'
+    volumes:
+      - /:/host:ro,rslave
+
+  # Kafka exporter for lag / partition / consumer metrics
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    container_name: kafka-exporter
+    command:
+      - --kafka.server=kafka:29092
+    ports:
+      - "9308:9308"
+    depends_on:
+      - kafka
+
+volumes:
+  postgres-data:
+  minio-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  default:
+    name: cdc-pipeline-network

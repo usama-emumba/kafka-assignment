@@ -1,0 +1,30 @@
+{
+  "name": "s3-sink-connector",
+  "config": {
+    "connector.class": "io.confluent.connect.s3.S3SinkConnector",
+    "tasks.max": "3",
+    "topics": "ecommerce.public.customers,ecommerce.public.products,ecommerce.public.orders,ecommerce.public.order_items",
+    "topics.dir": "topics",
+    "s3.bucket.name": "my-data-lake",
+    "s3.region": "us-east-1",
+    "store.url": "http://minio:9000",
+    "s3.path.style.access.enabled": "true",
+    "flush.size": "1",
+    "rotate.interval.ms": "5000",
+    "commit.interval.ms": "10000",
+    "storage.class": "io.confluent.connect.s3.storage.S3Storage",
+    "format.class": "io.confluent.connect.s3.format.parquet.ParquetFormat",
+    "parquet.codec": "snappy",
+    "partitioner.class": "io.confluent.connect.storage.partitioner.TimeBasedPartitioner",
+    "partition.duration.ms": "86400000",
+    "path.format": "yyyy/MM/dd",
+    "locale": "en-US",
+    "timezone": "UTC",
+    "timestamp.extractor": "RecordField",
+    "timestamp.field": "__source_ts_ms",
+    "schema.compatibility": "NONE",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "io.confluent.connect.avro.AvroConverter",
+    "value.converter.schema.registry.url": "http://schema-registry:8081"
+  }
+}
